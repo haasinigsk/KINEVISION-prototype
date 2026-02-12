@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Physics Viz - Final Polish</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* === TEAL VISUAL THEME === */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      min-height: 100vh; padding: 20px; color: #1e293b;
+    }
+    .container { max-width: 1400px; margin: 0 auto; }
+    .header {
+      background: linear-gradient(135deg, #028090 0%, #00A896 100%);
+      color: white; padding: 40px; border-radius: 12px; margin-bottom: 30px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .header h1 { font-size: 36px; font-weight: bold; margin-bottom: 10px; }
+    .header p { font-size: 18px; opacity: 0.9; }
+    .grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; margin-bottom: 30px; }
+    @media (max-width: 968px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .card h2 { color: #028090; font-size: 24px; margin-bottom: 20px; font-weight: 700; border-bottom: 1px solid #e2e8f0; padding-bottom: 15px; }
+    textarea {
+      width: 100%; height: 120px; padding: 15px; border: 2px solid #E2E8F0;
+      border-radius: 8px; font-size: 16px; font-family: inherit; resize: vertical; margin-bottom: 15px;
+      transition: border-color 0.2s;
+    }
+    textarea:focus { outline: none; border-color: #028090; }
+    button {
+      width: 100%; padding: 15px; background: #028090; color: white; border: none;
+      border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.3s;
+    }
+    button:hover { background: #026d7a; }
+    .example-btn {
+      display: block; width: 100%; padding: 10px; margin-bottom: 8px; background: #F0F4F8;
+      border: 1px solid #E2E8F0; border-radius: 6px; text-align: left; cursor: pointer;
+      font-size: 14px; color: #1E293B; transition: background 0.2s;
+    }
+    .example-btn:hover { background: #E2E8F0; border-color: #cbd5e1; }
+    .canvas-container {
+      background: #0f172a; border-radius: 8px; overflow: hidden;
+      border: 2px solid #E2E8F0; position: relative; min-height: 500px;
+      box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+    .cap-list { list-style: none; margin-top: 10px; }
+    .cap-list li { margin-bottom: 12px; padding-left: 25px; position: relative; color: #475569; font-size: 1rem; }
+    .cap-list li::before { content: "•"; color: #028090; font-weight: bold; position: absolute; left: 0; font-size: 20px; }
+    .hud-overlay {
+        position: absolute; top: 15px; left: 15px;
+        background: rgba(15, 23, 42, 0.85); padding: 10px 15px;
+        border-radius: 6px; border-left: 3px solid #028090;
+        color: #e2e8f0; font-family: monospace; font-size: 14px;
+        pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    function PhysicsApp() {
+      const [problemText, setProblemText] = useState('A ball is thrown at 50 m/s at 45 degrees.');
+      const [simData, setSimData] = useState(null);
+      const canvasRef = useRef(null);
+      
+      const cameraRef = useRef({ x: 0, y: 0, scale: 1 });
+
+      const examples = [
+        "A ball is thrown at 50 m/s at 45 degrees.",
+        "A sphere rolls down a 30 degree incline from 5m height.",
+        "A pendulum with length 3m swings from 45 degrees.",
+        "A spring oscillates with m=5kg k=30 and v0=10m/s."
+      ];
+
+      const analyze = (text) => {
+        const t = text.toLowerCase();
+        let type = 'projectile';
+        if (t.includes('spring')) type = 'spring';
+        else if (t.includes('pendulum')) type = 'pendulum';
+        else if (t.includes('roll')) type = 'rolling';
+        else if (t.includes('wedge') || t.includes('slide')) type = 'wedge';
+
+        const vMatch = text.match(/(\d+\.?\d*)\s*m\/s/);
+        const angMatch = text.match(/(\d+)\s*deg/);
+        const massMatch = text.match(/(\d+\.?\d*)\s*kg/);
+        const hMatch = text.match(/(\d+\.?\d*)\s*m\b/); 
+        const lenMatch = text.match(/length\s*(\d+\.?\d*)/) || text.match(/(\d+\.?\d*)\s*m\s*(?:long|length)/);
+        const kMatch = text.match(/k\s*=\s*(\d+)/);
+        
+        let mu = 0.0;
+        if (t.includes('rough')) mu = 0.3;
+
+        // Force Camera Reset
+        cameraRef.current = { x: 0, y: 0, scale: 1 };
+
+        setSimData({
+          type,
+          v0: vMatch ? parseFloat(vMatch[1]) : 20,
+          angle: angMatch ? parseFloat(angMatch[1]) : 45,
+          mass: massMatch ? parseFloat(massMatch[1]) : 5,
+          height: hMatch ? parseFloat(hMatch[1]) : 5,
+          len: lenMatch ? parseFloat(lenMatch[1]) : 3,
+          k: kMatch ? parseFloat(kMatch[1]) : 20,
+          mu: mu,
+          gravity: 9.8,
+          startTime: Date.now()
+        });
+      };
+
+      useEffect(() => { analyze(problemText); }, []);
+
+      useEffect(() => {
+        if (!simData || !canvasRef.current) return;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        let animationId;
+        
+        const animate = () => {
+          const now = Date.now();
+          const t_total = (now - simData.startTime) / 1000;
+          const loopTime = t_total % 10;
+          
+          const rect = canvas.getBoundingClientRect();
+          canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+          const w = rect.width; const h = rect.height;
+          const g = 9.8;
+          const rad = (simData.angle * Math.PI) / 180;
+
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#0f172a'; ctx.fillRect(0,0, canvas.width, canvas.height);
+
+          // === 1. PROJECTILE ===
+          if (simData.type === 'projectile') {
+              const vx = simData.v0 * Math.cos(rad);
+              const vy = simData.v0 * Math.sin(rad);
+              const t_ground = (2 * vy) / g;
+              
+              const t_eff = Math.min(Math.max(0, loopTime - 0.8), t_ground);
+              const isMoving = t_eff < t_ground && t_eff > 0;
+              
+              const bx = vx * t_eff;
+              const by = vy * t_eff - 0.5 * g * t_eff * t_eff;
+              
+              const range = vx * t_ground;
+              const maxH = (vy * vy) / (2 * g);
+              
+              const padding = 150;
+              const scaleFit = Math.min((w - padding) / range, (h - padding) / maxH, 15);
+              
+              const pxPerM = 15; 
+              
+              let targetScale = 1;
+              let targetX = 0;
+              let targetY = 0;
+
+              if (isMoving) {
+                  // PHASE 1: FOLLOW (Action Cam)
+                  targetScale = 1.5; 
+                  const centerX = w / 2;
+                  targetX = centerX - (50 + bx * (15 * targetScale));
+                  if (targetX > 0) targetX = 0; 
+                  
+                  const screenY = (h - 100) - (by * 15 * targetScale);
+                  if (screenY < h * 0.3) targetY = (h * 0.3) - screenY;
+                  else targetY = 0;
+              } else {
+                  // PHASE 2: OVERVIEW
+                  targetScale = scaleFit; 
+                  targetX = 0; 
+                  targetY = 0;
+              }
+
+              if (loopTime < 0.1) {
+                  cameraRef.current = { scale: targetScale, x: targetX, y: targetY };
+              } else {
+                  const cam = cameraRef.current;
+                  cam.scale += (targetScale - cam.scale) * 0.08;
+                  cam.x += (targetX - cam.x) * 0.08;
+                  cam.y += (targetY - cam.y) * 0.08;
+              }
+
+              const cam = cameraRef.current;
+              ctx.save();
+              ctx.translate(cam.x, cam.y);
+              
+              const groundY = h - 100;
+              const currentPx = 15 * cam.scale;
+
+              // Ground & Grid
+              ctx.strokeStyle = '#475569'; ctx.lineWidth = 2;
+              ctx.beginPath(); ctx.moveTo(-10000, groundY); ctx.lineTo(10000, groundY); ctx.stroke();
+              drawGrid(ctx, 50000, h*4, currentPx);
+
+              // Stickman
+              drawStickman(ctx, 50, groundY, 'throw', loopTime, cam.scale);
+
+              // Trajectory Line
+              ctx.strokeStyle = 'rgba(45, 212, 191, 0.6)'; ctx.lineWidth = 3;
+              ctx.beginPath();
+              const drawSteps = isMoving ? (t_eff / t_ground) * 100 : 100;
+              for(let i=0; i<=drawSteps; i++){
+                  const st = (t_ground * i)/100;
+                  const sx = 50 + (vx * st) * currentPx;
+                  const sy = groundY - (vy * st - 0.5 * g * st * st) * currentPx;
+                  if(i===0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+              }
+              ctx.stroke();
+
+              // Ball
+              const drawX = 50 + bx * currentPx;
+              const drawY = groundY - by * currentPx;
+              if (loopTime >= 0.8) {
+                drawBall(ctx, drawX, drawY, '#028090', Math.max(5, 0.6 * currentPx));
+              }
+              
+              ctx.restore(); // END CAMERA TRANSFORM
+
+              // === SCREEN SPACE UI (RANGE VISIBILITY FIX) ===
+              if (!isMoving && loopTime > 1) {
+                  // Calculate where the center of the range is on screen
+                  const screenRangeX = cam.x + (50 + range*currentPx/2);
+                  const screenRangeY = cam.y + groundY + 50; 
+                  
+                  ctx.fillStyle = '#00A896'; 
+                  ctx.font = 'bold 28px sans-serif'; 
+                  ctx.textAlign = 'center';
+                  ctx.fillText(`RANGE: ${range.toFixed(1)}m`, screenRangeX, screenRangeY);
+                  ctx.textAlign = 'left'; // Reset
+              }
+              
+              // HUD
+              if(isMoving) {
+                  drawHUD(ctx, 20, 60, Math.sqrt(vx**2 + (vy-g*t_eff)**2).toFixed(1), t_eff);
+              }
+          } 
+
+          // === 2. WEDGE / ROLL ===
+          else if (simData.type === 'wedge' || simData.type === 'rolling') {
+              const rampPx = 400;
+              const startX = 150, startY = h - 100;
+              const acc = g * Math.sin(rad) * (simData.type === 'rolling' ? 5/7 : 1);
+              const t_end = Math.sqrt(2 * (rampPx/20) / acc);
+              let t = Math.min(Math.max(0, loopTime-0.8), t_end);
+              const dist = 0.5 * acc * t * t * 20;
+              const v_curr = acc * t; // Velocity
+
+              const cx = startX + (rampPx - dist) * Math.cos(rad);
+              const cy = startY - (rampPx - dist) * Math.sin(rad);
+
+              ctx.fillStyle = '#334155'; ctx.beginPath(); ctx.moveTo(startX, startY);
+              ctx.lineTo(startX + rampPx*Math.cos(rad), startY - rampPx*Math.sin(rad));
+              ctx.lineTo(startX + rampPx*Math.cos(rad), startY); ctx.fill();
+              
+              const tipX = startX + rampPx*Math.cos(rad);
+              const tipY = startY - rampPx*Math.sin(rad);
+              drawStickman(ctx, tipX + 30, tipY, 'push', loopTime, 1);
+              
+              // Object
+              if (simData.type === 'rolling') {
+                  ctx.save(); ctx.translate(cx, cy-20); ctx.rotate(-(dist/20));
+                  drawBall(ctx, 0, 0, '#028090', 15); ctx.strokeStyle='white'; ctx.strokeRect(-2, -20, 4, 10); ctx.restore();
+              } else {
+                  ctx.save(); ctx.translate(cx, cy); ctx.rotate(-rad);
+                  ctx.fillStyle = '#E11D48'; ctx.fillRect(0, -40, 40, 40); 
+                  ctx.fillStyle = 'white'; ctx.font='12px sans-serif'; ctx.fillText(`${simData.mass}kg`, 5, -15);
+                  ctx.restore();
+              }
+
+              // Labels
+              ctx.font = 'bold 16px sans-serif';
+              ctx.fillStyle = '#f472b6'; ctx.fillText(`h=${simData.height}m`, tipX + 25, (startY + tipY)/2);
+              ctx.fillStyle = '#fbbf24'; ctx.fillText(`θ=${simData.angle}°`, startX + 60, startY - 10);
+              
+              // VELOCITY LABEL (Fixed placement)
+              if (loopTime > 0.8) {
+                  ctx.fillStyle = '#00A896';
+                  ctx.fillText(`v = ${v_curr.toFixed(1)} m/s`, cx + 20, cy - 50);
+                  drawHUD(ctx, cx, cy-80, v_curr.toFixed(2), t);
+              }
+          }
+
+          // === 3. PENDULUM ===
+          else if (simData.type === 'pendulum') {
+              const L_px = Math.min(simData.len * 50, h/2);
+              const omega = Math.sqrt(g / simData.len);
+              const theta = rad * Math.cos(omega * loopTime);
+              const v_tan = Math.abs(simData.len * -rad * omega * Math.sin(omega*loopTime)); // Tangential Velocity
+
+              const cx = w/2 + L_px * Math.sin(theta);
+              const cy = 100 + L_px * Math.cos(theta);
+              
+              ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 2;
+              ctx.beginPath(); ctx.moveTo(w/2, 100); ctx.lineTo(cx, cy); ctx.stroke();
+              drawBall(ctx, cx, cy, '#028090', 20);
+              ctx.fillStyle = '#334155'; ctx.fillRect(w/2 - 60, 90, 120, 10);
+              
+              // Labels
+              ctx.fillStyle = 'white'; ctx.font = '16px monospace';
+              ctx.fillText(`L = ${simData.len}m`, w/2 + 10, 100 + L_px/2);
+              ctx.fillText(`m = ${simData.mass}kg`, cx + 25, cy);
+              
+              // VELOCITY LABEL
+              ctx.fillStyle = '#00A896';
+              ctx.fillText(`v = ${v_tan.toFixed(2)} m/s`, cx + 25, cy + 25);
+
+              drawHUD(ctx, cx+25, cy+50, v_tan.toFixed(2), loopTime);
+          }
+
+          // === 4. SPRING ===
+          else if (simData.type === 'spring') {
+              const floorY = h - 100;
+              const omega = Math.sqrt(simData.k / simData.mass);
+              const displacement = (simData.v0 / omega) * Math.sin(omega * loopTime) * 15; 
+              const blockX = 300 + displacement;
+              const v_inst = Math.abs(simData.v0 * Math.cos(omega * loopTime));
+              
+              ctx.strokeStyle = '#475569'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(w, floorY); ctx.stroke();
+              ctx.fillStyle = '#334155'; ctx.fillRect(80, floorY-100, 20, 100);
+              ctx.strokeStyle = '#00A896'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(100, floorY-20);
+              for(let i=1; i<=15; i++) ctx.lineTo(100 + ((blockX-100)/15)*i, (floorY-20) + (i%2===0?15:-15));
+              ctx.stroke();
+              ctx.fillStyle = '#fbbf24'; ctx.fillRect(blockX, floorY-40, 50, 40);
+              
+              // LABELS
+              ctx.fillStyle = 'white'; ctx.font='16px monospace';
+              ctx.fillText(`k = ${simData.k} N/m`, 120, floorY - 60);
+              ctx.fillText(`v0 = ${simData.v0} m/s`, 120, floorY - 80);
+              
+              // MASS LABEL (BOLD & VISIBLE)
+              ctx.fillStyle = '#fbbf24'; ctx.font = 'bold 18px sans-serif';
+              ctx.fillText(`m = ${simData.mass} kg`, blockX, floorY - 50);
+
+              drawHUD(ctx, blockX+25, floorY+30, v_inst.toFixed(2), loopTime);
+          }
+
+          animationId = requestAnimationFrame(animate);
+        };
+        animationId = requestAnimationFrame(animate);
+        
+        return () => cancelAnimationFrame(animationId);
+      }, [simData]);
+
+      function drawStickman(ctx, x, y, action, t, scale) {
+        ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 3 * scale; ctx.lineCap='round';
+        const s = scale; 
+        ctx.beginPath(); ctx.moveTo(x, y-(20*s)); ctx.lineTo(x-(10*s), y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, y-(20*s)); ctx.lineTo(x+(10*s), y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, y-(20*s)); ctx.lineTo(x, y-(50*s)); ctx.stroke();
+        ctx.fillStyle = '#e2e8f0'; ctx.beginPath(); ctx.arc(x, y-(60*s), 8*s, 0, Math.PI*2); ctx.fill();
+        if (action === 'throw') {
+             let angle = Math.PI; if (t < 0.5) angle = Math.PI + (Math.PI/2 * (t/0.5)); else angle = 1.5 * Math.PI;
+             ctx.beginPath(); ctx.moveTo(x, y-(45*s)); ctx.lineTo(x + (25*s) * Math.cos(angle), (y-(45*s)) + (25*s) * Math.sin(angle)); ctx.stroke();
+        } else { 
+             ctx.beginPath(); ctx.moveTo(x, y-(45*s)); ctx.lineTo(x-(20*s), y-(25*s)); ctx.stroke(); 
+        }
+      }
+      function drawBall(ctx, x, y, color, radius) { 
+          ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI*2); ctx.fill(); 
+      }
+      function drawHUD(ctx, x, y, v, t) {
+        ctx.font = 'bold 12px monospace'; ctx.fillStyle = 'rgba(15, 23, 42, 0.9)'; ctx.strokeStyle = '#2dd4bf';
+        ctx.beginPath(); ctx.roundRect(x, y, 110, 50, 6); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#2dd4bf'; ctx.fillText(`v: ${v} m/s`, x+10, y+20);
+        ctx.fillStyle = '#94a3b8'; ctx.fillText(`t: ${typeof t === 'number' ? t.toFixed(2) : t} s`, x+10, y+40);
+      }
+      function drawGrid(ctx, w, h, scale) {
+          ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1;
+          const gridSize = 50 * scale; 
+          for(let i=-w; i<w*2; i+=gridSize) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,h); ctx.stroke(); }
+          for(let i=0; i<h; i+=gridSize) { ctx.beginPath(); ctx.moveTo(-w,i); ctx.lineTo(w*2,i); ctx.stroke(); }
+      }
+
+      return (
+        <div className="container">
+          <div className="header">
+            <h1>🔬 AI Physics Visualization</h1>
+            <p>Convert problem statements into interactive dynamic simulations.</p>
+          </div>
+          <div className="grid">
+            <div className="card">
+              <h2>📝 Problem Statement</h2>
+              <textarea value={problemText} onChange={e => setProblemText(e.target.value)} />
+              <button onClick={() => analyze(problemText)}>Analyze & Visualize 🚀</button>
+              <div style={{marginTop: '20px'}}>
+                {examples.map((ex, i) => (
+                  <button key={i} className="example-btn" onClick={() => { setProblemText(ex); analyze(ex); }}>{ex}</button>
+                ))}
+              </div>
+            </div>
+            <div className="card">
+              <h2>🎨 Interactive Simulation</h2>
+              <div className="canvas-container">
+                 <canvas ref={canvasRef} />
+                 {simData && <div className="hud-overlay">
+                    <div>MODE: {simData.type.toUpperCase()}</div>
+                    {simData.type === 'projectile' && <div>CAM: {simData.v0 > 0 ? "Tracking" : "Static"}</div>}
+                 </div>}
+              </div>
+            </div>
+          </div>
+          <div className="card">
+            <h2>Capabilities</h2>
+            <ul className="cap-list">
+               <li><strong>AI-based understanding:</strong> Intelligent interpretation of Physics problem contexts.</li>
+               <li><strong>Conversion:</strong> Transforms unstructured text into structured models.</li>
+               <li><strong>Automatic Generation:</strong> Instantly creates interactive visual simulations.</li>
+               <li><strong>Real-time Manipulation:</strong> Modify parameters and observe immediate visual feedback.</li>
+               <li><strong>Unified UI:</strong> Intuitive interface for exploration and learning.</li>
+            </ul>
+          </div>
+        </div>
+      );
+    }
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<PhysicsApp />);
+  </script>
+</body>
+</html>
