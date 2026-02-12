@@ -53,7 +53,7 @@ mathematically.
 
 ------------------------------------------------------------------------
 
-## ▶️ How to Run the Project
+## How to Run the Project
 
 ### 1️⃣ Clone the Repository
 
@@ -121,18 +121,6 @@ python -m spacy download en_core_web_sm
 
 ✔ Ports used: - Python → 5000 - Node → 3001 - Frontend → 5173 (default
 Vite)
-
-------------------------------------------------------------------------
-
-## 🎬 MVP Demo Video
-
-(Add your demo video link here)
-
-------------------------------------------------------------------------
-
-## 🖼 MVP Demo Images
-
-(Add screenshots here)
 
 ------------------------------------------------------------------------
 
